@@ -1,0 +1,4 @@
+{
+  "api_url": {{ usps.api_url | to_json }},
+  "user_id": {{ usps.user_id | to_json }}
+}

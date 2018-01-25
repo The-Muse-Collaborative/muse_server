@@ -1,0 +1,481 @@
+---
+
+- name: Initialize server for themusecollaborative.org.
+  hosts: all
+  become: yes
+  vars_files:
+    - config.yml
+
+  tasks:
+
+    #
+    # Updates setup.
+    #
+    - name: Get Debian up-to-date.
+      apt:
+        upgrade: dist
+        update_cache: true
+
+    - name: Install update email notifications.
+      apt:
+        name: apticron
+        state: present
+
+    - name: Install unattended upgrades.
+      apt:
+        name: unattended-upgrades
+        state: present
+
+    - name: Install unattened upgrades configuration files.
+      template:
+        src: "{{ item }}"
+        dest: /etc/apt/apt.conf.d
+      with_fileglob:
+        - templates/etc/apt/apt.conf.d/*
+
+    #
+    # Firewall setup.
+    #
+    - name: Install firewall.
+      apt:
+        name: ufw
+        state: present
+    
+    - name: Configure firewall defaults.
+      ufw:
+        direction: "{{ item.direction }}"
+        policy: "{{ item.policy }}"
+      with_items:
+        - { direction: incoming, policy: deny }
+        - { direction: outgoing, policy: allow }
+      notify:
+        - restart ufw
+    
+    - name: Configure ufw rules
+      ufw: rule={{ item.rule }} port={{ item.port }} proto={{ item.proto }}
+      with_items:
+        - { rule: 'limit', port: '22', proto: 'tcp' }
+        - { rule: 'allow', port: '80', proto: 'tcp' }
+        - { rule: 'allow', port: '443', proto: 'tcp' }
+      notify:
+        - restart ufw
+    
+    - name: Enable firewall logging.
+      ufw:
+        logging: on
+      notify:
+        - restart ufw
+    
+    - name: Enable firewall.
+      ufw:
+        state: enabled
+
+    #
+    # Group/User setup.
+    #
+    - name: Create Linux groups.
+      group:
+        name: "{{ item.1 }}"
+        state: present
+      with_subelements:
+        - "{{ users }}"
+        - groups
+
+    - name: Create Linux users.
+      user:
+        name: "{{ item.0.username }}"
+        shell: /bin/bash
+        groups: "{{ item.1 }}"
+        append: yes
+      with_subelements:
+        - "{{ users }}"
+        - groups
+
+    - name: Add authorized ssh keys for each user.
+      authorized_key:
+        user: "{{ item.0.username }}"
+        key: "{{ item.1 }}"
+        state: present
+      with_subelements:
+        - "{{ users }}"
+        - ssh_keys
+
+    # TODO how to do only on first creation?
+    - name: Set no passwords for each user.
+      command: passwd -d "{{ item.username }}"
+      with_items: "{{ users }}"
+
+    # TODO how to do only on first creation?
+    - name: Ensure a new password must be set on first ssh login.
+      command: chage -d0 "{{ item.username }}"
+      with_items: "{{ users }}"
+
+    #
+    # Time setup.
+    #
+    - name: Set timezone.
+      timezone:
+        name: "{{ system.timezone }}"
+    
+    - name: Enable NTP.
+      service:
+        name: systemd-timesyncd.service
+        enabled: yes
+        state: started
+
+    #
+    # Common tools setup.
+    #
+    - name: Install tools packages.
+      apt:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - git
+
+    - name: Install pip for python3.
+      shell: python3 <(curl https://bootstrap.pypa.io/get-pip.py)
+      args:
+        executable: /bin/bash
+        creates: /usr/local/bin/pip3
+
+    - name: Make sure pip is up to date.
+      command: pip3 install --upgrade pip
+
+    - name: Install virtualenv.
+      command: pip3 install --upgrade virtualenv
+
+    #
+    # Fail2Ban setup.
+    #
+    - name: Install fail2ban.
+      apt:
+        name: fail2ban
+        state: present
+    
+    - name: Install fail2ban configuration file.
+      template:
+        src: templates/etc/fail2ban/jail.local
+        dest: /etc/fail2ban/jail.local
+      notify:
+        - restart fail2ban
+
+    #
+    # Database setup.
+    #
+    - name: Install database software.
+      apt:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - mysql-server
+        - python-mysqldb
+
+    - name: Install mysql configuration file.
+      template:
+        src: templates/etc/my.cnf
+        dest: /etc/my.cnf
+      notify: 
+        - restart mysql
+
+    - name: Install database archive engine.
+      command: mysql -e "install soname 'ha_archive';"
+
+    - name: Create Wordpress database.
+      mysql_db:
+        login_user: root
+        name: "{{ wordpress_database.name }}"
+        state: present
+
+    - name: Create Wordpress database user.
+      mysql_user:
+        name: "{{ wordpress_database.username }}"
+        password: "{{ wordpress_database.password }}"
+        priv: "{{ wordpress_database.name }}.*:ALL"
+        state: present
+      notify: 
+        - restart mysql
+
+    - name: Create CiviCRM database.
+      mysql_db:
+        login_user: root
+        name: "{{ civicrm_database.name }}"
+        state: present
+
+    - name: Create CiviCRM database user.
+      mysql_user:
+        name: "{{ civicrm_database.username }}"
+        password: "{{ civicrm_database.password }}"
+        priv: "{{ civicrm_database.name }}.*:ALL"
+        state: present
+      notify: 
+        - restart mysql
+
+    - name: Create database backup user.
+      mysql_user:
+        name: "{{ database_backup.username }}"
+        password: "{{ database_backup.password }}"
+        priv: "{{ wordpress_database.name }}.*:select/{{ civicrm_database.name }}.*:select"
+        state: present
+      notify: 
+        - restart mysql
+
+    #
+    # USPS address validation server setup.
+    #
+    - name: Clone muse_usps_server from GitHub.
+      git:
+        repo: https://github.com/jonesinator/muse_usps_server.git
+        dest: /opt/muse_usps_server
+        version: "{{ usps.muse_usps_server_version }}"
+
+    - name: Configure muse_usps_server to ignore changes to logging.ini.
+      lineinfile:
+        dest: /opt/muse_usps_server/.git/info/exclude
+        line: logging.ini
+
+    - name: Configure muse_usps_server to ignore changes to logging.ini.
+      command: git update-index --skip-worktree logging.ini
+      args:
+        chdir: /opt/muse_usps_server
+
+    - name: Configure muse_usps_server virtual environment.
+      pip:
+        requirements: /opt/muse_usps_server/requirements.txt
+        virtualenv: /opt/muse_usps_server_env
+        virtualenv_python: python3
+
+    - name: Install the api configuration for muse_usps_server.
+      template:
+        src: opt/muse_usps_server/config.json
+        dest: /opt/muse_usps_server/config.json
+
+    - name: Install the logging configuration for muse_usps_server.
+      template:
+        src: opt/muse_usps_server/logging.ini
+        dest: /opt/muse_usps_server/logging.ini
+
+    - name: Make sure the log folder exists.
+      file:
+        path: /var/log/muse
+        owner: www-data
+        group: www-data
+        state: directory
+        mode: 0755
+
+    #
+    # PHP Setup.
+    #
+    - name: Install PHP.
+      apt:
+       name: "{{ item }}"
+       state: present
+      with_items:
+        - php7.0
+        - php7.0-cli
+        - php7.0-curl
+        - php7.0-gd
+        - php7.0-imagick
+        - php7.0-json
+        - php7.0-mbstring
+        - php7.0-mysql
+        - php7.0-xml
+        - php7.0-zip
+
+    #
+    # Apache setup.
+    #
+    - name: Install webserver software.
+      apt:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - apache2
+        - apache2-utils
+        - libapache2-mod-wsgi-py3
+        - libssl-dev
+        - openssl
+
+    - name: Enable webserver modules.
+      apache2_module:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - cgi
+        - headers
+        - proxy
+        - proxy_http
+        - rewrite
+        - ssl
+        - wsgi
+      notify:
+        - restart apache
+
+    - name: Install webserver configuration files.
+      template:
+        src: "{{ item }}"
+        dest: /etc/apache2/sites-available
+      with_fileglob:
+        - templates/etc/apache2/sites-available/*
+
+    - name: Remove default index.html file.
+      file:
+        path: "/var/www/html/index.html"
+        state: absent
+
+    - name: Disable default sites.
+      command: "a2dissite {{ item }}"
+      with_items:
+        - 000-default
+        - default-ssl
+
+    - name: Enable sites.
+      command: "a2ensite {{ item }}"
+      with_items:
+        - http-redirect
+        - https
+        - wordpress
+        - muse_usps
+        - muse_donation
+
+    #
+    # Wordpress setup.
+    #
+    - name: Install the Wordpress CLI.
+      get_url:
+        url: "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar"
+        dest: /usr/local/bin/wp
+        mode: 0755
+
+    - name: Install the wp-cli YAML config file.
+      template:
+        src: templates/var/www/html/wp-cli.yml
+        dest: /var/www/html/wp-cli.yml
+    
+    - name: Download Wordpress.
+      command: wp --allow-root --path=/var/www/html core download
+      args:
+        creates: /var/www/html/index.php
+
+    - name: Configure Wordpress.
+      command: |
+        wp --allow-root --path=/var/www/html config create
+        --dbhost=localhost
+        --dbname={{ wordpress_database.name }}
+        --dbuser={{ wordpress_database.username }}
+        --dbpass={{ wordpress_database.password }}
+      args:
+        creates: /var/www/html/wp-config.php
+
+    - name: Check if wordpress is installed.
+      command: wp --allow-root --path=/var/www/html core is-installed
+      ignore_errors: yes
+      register: wordpress_installed
+
+    - name: Install Wordpress.
+      command: |
+        wp --allow-root --path=/var/www/html core install
+        --url=https://{{ system.fully_qualified_domain_name }}
+        --title=temp
+        --admin_user=temp
+        --admin_password=temp
+        --admin_email=temp@temp.temp
+        --skip-email
+      when: wordpress_installed.rc == 1
+
+    - name: Configure Wordpress rewrite structure.
+      command: wp --allow-root --path=/var/www/html rewrite structure --hard '/%category%/%postname%'
+
+    - name: Configure Wordpress timezone.
+      command: wp --allow-root --path=/var/www/html option update timezone_string "{{ system.timezone }}"
+
+    - name: Install Wordpress plugins.
+      command: "wp --allow-root --path=/var/www/html plugin install {{ item.install }} --activate"
+      args:
+        creates: "/var/www/html/wp-content/plugins/{{ item.directory }}"
+      with_items:
+        - { install: "https://download.civicrm.org/civicrm-4.7.29-wordpress.zip", directory: civicrm }
+
+    #
+    # CiviCRM setup.
+    #
+    - name: Install CiviCRM.
+      command: |
+        wp --allow-root --path=/var/www/html civicrm install
+        --dbhost=localhost
+        --dbname={{ civicrm_database.name }}
+        --dbuser={{ civicrm_database.username }}
+        --dbpass={{ civicrm_database.password }}
+        --ssl=on
+        --siteurl={{ system.fully_qualified_domain_name }}
+      args:
+        creates: /var/www/html/wp-content/uploads/civicrm
+
+    # TODO
+    # When these are installed above "civicrm install" it causes "civicrm install" to fail...
+    # I have not yet figured out why.
+    - name: Install Wordpress plugins.
+      command: "wp --allow-root --path=/var/www/html plugin install {{ item.install }} --activate"
+      args:
+        creates: "/var/www/html/wp-content/plugins/{{ item.directory }}"
+      with_items:
+        - { install: google-analytics-dashboard-for-wp, directory: google-analytics-dashboard-for-wp }
+        - { install: display-posts-shortcode, directory: display-posts-shortcode }
+        - { install: shortcodes-ultimate, directory: shortcodes-ultimate }
+        - { install: limit-login-attempts, directory: limit-login-attempts }
+        - { install: civievent-widget, directory: civievent-widget }
+        - { install: social-media-auto-publish, directory: social-media-auto-publish }
+
+        #    - name: Run CiviCRM cron job.
+        #      command: |
+        #        wp --allow-root --path=/var/www/html
+        #        civicrm api job.execute auth=0
+
+    #
+    # Fix permissions in the WordPress file tree.
+    #
+    - name: Fix Wordpress uploads directory ownership.
+      file:
+        path: /var/www/html/wp-content/uploads
+        owner: www-data
+        group: www-data
+        recurse: yes
+
+    - name: Fix CiviCRM directory ownership.
+      file:
+        path: "/var/www/html/wp-content/uploads/{{ item }}"
+        mode: 0755
+      with_items:
+        - civicrm
+        - civicrm/templates_c
+
+    #
+    # Extra packages defined by config.yml.
+    #
+    - name: Install extra packages.
+      apt:
+        name: "{{ item }}"
+        state: present
+      with_items: "{{ extra_packages }}"
+
+  handlers:
+    - name: restart apache
+      service:
+        name: apache2
+        state: restarted
+    - name: restart fail2ban
+      service:
+        name: fail2ban
+        state: restarted
+    - name: restart mysql
+      service:
+        name: mysql
+        state: restarted
+    - name: restart ssh
+      service:
+        name: ssh
+        state: restarted
+    - name: restart ufw
+      service:
+        name: ufw
+        state: restarted
