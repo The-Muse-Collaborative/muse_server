@@ -194,8 +194,15 @@
       notify: 
         - restart mysql
 
+    - name: Determine if the archive engine is installed.
+      shell: 'mysql -e "show plugins;" | grep -q ARCHIVE'
+      register: plugin_result
+      failed_when: False
+      changed_when: False
+
     - name: Install database archive engine.
       command: mysql -e "install soname 'ha_archive';"
+      when: plugin_result.rc != 0
 
     - name: Create Wordpress database.
       mysql_db:
@@ -397,9 +404,9 @@
 
     - name: Check if wordpress is installed.
       command: wp --allow-root --path=/var/www/html core is-installed
-      ignore_errors: yes
       register: wordpress_installed
       changed_when: False
+      failed_when: False
 
     - name: Install Wordpress.
       command: |
