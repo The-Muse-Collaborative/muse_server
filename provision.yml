@@ -133,11 +133,14 @@
       timezone:
         name: "{{ system.timezone }}"
     
+    # We don't use NTP in the development environment because virtualbox has
+    # its own time syncing method.
     - name: Enable NTP.
       service:
         name: systemd-timesyncd.service
         enabled: yes
         state: started
+      when: "system.environment != 'dev'"
 
     #
     # Common tools setup.
@@ -419,9 +422,11 @@
         --skip-email
       when: wordpress_installed.rc == 1
 
-    # TODO How to tell if this changed?
     - name: Configure Wordpress rewrite structure.
       command: wp --allow-root --path=/var/www/html rewrite structure --hard '/%category%/%postname%'
+      args:
+        chdir: /var/www/html
+        creates: /var/www/html/.htaccess
 
     - name: Configure Wordpress timezone.
       command: wp --allow-root --path=/var/www/html option update timezone_string "{{ system.timezone }}"
