@@ -100,15 +100,31 @@
         - "{{ users }}"
         - ssh_keys
 
-    # TODO how to do only on first creation?
-    - name: Set no passwords for each user.
-      command: passwd -d "{{ item.username }}"
+    - name: Determine the password status for the users.
+      shell: "passwd -S {{ item.username }} | cut -d' ' -f2"
+      register: shadow_passwords
       with_items: "{{ users }}"
+      changed_when: False
 
-    # TODO how to do only on first creation?
-    - name: Ensure a new password must be set on first ssh login.
-      command: chage -d0 "{{ item.username }}"
-      with_items: "{{ users }}"
+    - debug:
+        msg: "{{item.0.username}} {{item.1.stdout}}"
+      with_together:
+        - "{{ users }}"
+        - "{{ shadow_passwords.results }}"
+
+    - name: Make the account have no password.
+      command: passwd -d "{{ item.0.username }}"
+      when: item.1.stdout != "P"
+      with_together:
+        - "{{ users }}"
+        - "{{ shadow_passwords.results }}"
+
+    - name: Ensure a new password must be set on first login.
+      command: chage -d0 "{{ item.0.username }}"
+      when: item.1.stdout != "P"
+      with_together:
+        - "{{ users }}"
+        - "{{ shadow_passwords.results }}"
 
     #
     # Time setup.
@@ -139,11 +155,11 @@
         executable: /bin/bash
         creates: /usr/local/bin/pip3
 
-    - name: Make sure pip is up to date.
-      command: pip3 install --upgrade pip
-
-    - name: Install virtualenv.
-      command: pip3 install --upgrade virtualenv
+    - name: Make sure virtualenv is installed.
+      pip:
+        name: virtualenv
+        state: present
+        executable: pip3
 
     #
     # Fail2Ban setup.
@@ -234,10 +250,18 @@
         dest: /opt/muse_usps_server/.git/info/exclude
         line: logging.ini
 
+    - name: Determine if logging.ini is already skip worktree enabled.
+      shell: "git ls-files -v logging.ini | cut -d' ' -f1"
+      args:
+        chdir: /opt/muse_usps_server
+      register: skip_worktree
+      changed_when: False
+
     - name: Configure muse_usps_server to ignore changes to logging.ini.
       command: git update-index --skip-worktree logging.ini
       args:
         chdir: /opt/muse_usps_server
+      when: skip_worktree.stdout != 'S'
 
     - name: Configure muse_usps_server virtual environment.
       pip:
@@ -325,18 +349,22 @@
 
     - name: Disable default sites.
       command: "a2dissite {{ item }}"
+      register: a2dissite_result
       with_items:
         - 000-default
         - default-ssl
+      changed_when: "'already disabled' not in a2dissite_result.stdout"
 
     - name: Enable sites.
       command: "a2ensite {{ item }}"
+      register: a2ensite_result
       with_items:
         - http-redirect
         - https
         - wordpress
         - muse_usps
         - muse_donation
+      changed_when: "'already enabled' not in a2ensite_result.stdout"
 
     #
     # Wordpress setup.
@@ -371,6 +399,7 @@
       command: wp --allow-root --path=/var/www/html core is-installed
       ignore_errors: yes
       register: wordpress_installed
+      changed_when: False
 
     - name: Install Wordpress.
       command: |
@@ -383,11 +412,14 @@
         --skip-email
       when: wordpress_installed.rc == 1
 
+    # TODO How to tell if this changed?
     - name: Configure Wordpress rewrite structure.
       command: wp --allow-root --path=/var/www/html rewrite structure --hard '/%category%/%postname%'
 
     - name: Configure Wordpress timezone.
       command: wp --allow-root --path=/var/www/html option update timezone_string "{{ system.timezone }}"
+      register: timezone_result
+      changed_when: "'option is unchanged' not in timezone_result.stdout"
 
     - name: Install Wordpress plugins.
       command: "wp --allow-root --path=/var/www/html plugin install {{ item.install }} --activate"
