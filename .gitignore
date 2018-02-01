@@ -1,3 +1,4 @@
 .vagrant
 config.yml
 provision.retry
+muse_theme

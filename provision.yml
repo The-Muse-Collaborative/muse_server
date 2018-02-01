@@ -476,6 +476,34 @@
         #        civicrm api job.execute auth=0
 
     #
+    # Theme setup.
+    # TODO Theme version via git tag/branch?
+    # TODO Cleaner separation of dev/test/stage/prod code?
+    #
+    - name: Clone muse_usps_server from GitHub (prod).
+      git:
+        repo: https://github.com/jonesinator/muse_theme.git
+        dest: /var/www/html/wp-content/themes/muse_theme
+        version: "{{ usps.muse_usps_server_version }}"
+      when: system.environment == "prod"
+
+    - name: Clone muse_usps_server from GitHub (dev).
+      git:
+        repo: https://github.com/jonesinator/muse_theme.git
+        dest: /vagrant/muse_theme
+      when: system.environment == "dev"
+
+    - name: Symlink theme for development (dev).
+      file:
+        src: /vagrant/muse_theme
+        dest: /var/www/html/wp-content/themes/muse_theme
+        state: link
+      when: system.environment == "dev"
+
+    - name: Activate theme.
+      command: "wp --allow-root --path=/var/www/html theme activate muse_theme"
+
+    #
     # Fix permissions in the WordPress file tree.
     #
     - name: Fix Wordpress uploads directory ownership.
