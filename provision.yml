@@ -514,7 +514,7 @@
       when: system.environment == "dev"
 
     - name: Install packages.
-      shell: "npm install --verbose --unsafe-perm"
+      shell: "npm install --verbose --unsafe-perm --no-bin-links"
       args:
         chdir: /var/www/html/wp-content/themes/muse_theme
         creates: /var/www/html/wp-content/themes/muse_theme/node_modules
