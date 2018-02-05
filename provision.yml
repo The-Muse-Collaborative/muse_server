@@ -518,7 +518,7 @@
 
     - name: Activate theme.
       command: "wp --allow-root --path=/var/www/html theme activate muse_theme"
-      capture: output
+      register: output
       changed_when: "'already active' not in output.stderr"
 
     #
