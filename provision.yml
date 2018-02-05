@@ -486,10 +486,13 @@
         name: nodejs
         state: present
 
-    - name: Install gulp.
+    - name: Install node packages.
       npm:
         global: yes
-        name: gulp-cli
+        name: "{{ item }}"
+      with_items:
+        - gulp-cli
+        - browsersync
 
     - name: Clone muse_theme from GitHub (prod).
       git:
