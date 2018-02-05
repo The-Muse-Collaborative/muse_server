@@ -463,6 +463,7 @@
       args:
         creates: "/var/www/html/wp-content/plugins/{{ item.directory }}"
       with_items:
+        - { install: wordpress-importer, directory: wordpress-importer }
         - { install: google-analytics-dashboard-for-wp, directory: google-analytics-dashboard-for-wp }
         - { install: display-posts-shortcode, directory: display-posts-shortcode }
         - { install: shortcodes-ultimate, directory: shortcodes-ultimate }
@@ -470,24 +471,33 @@
         - { install: civievent-widget, directory: civievent-widget }
         - { install: social-media-auto-publish, directory: social-media-auto-publish }
 
-        #    - name: Run CiviCRM cron job.
-        #      command: |
-        #        wp --allow-root --path=/var/www/html
-        #        civicrm api job.execute auth=0
-
     #
     # Theme setup.
     # TODO Theme version via git tag/branch?
     # TODO Cleaner separation of dev/test/stage/prod code?
     #
-    - name: Clone muse_usps_server from GitHub (prod).
+    - name: Install node repo.
+      shell: "curl -sL https://deb.nodesource.com/setup_9.x | sudo -E bash -"
+      args:
+        creates: /etc/apt/sources.list.d/nodesource.list
+
+    - name: Install node.
+      apt:
+        name: nodejs
+        state: present
+
+    - name: Install gulp.
+      npm:
+        global: yes
+        name: gulp-cli
+
+    - name: Clone muse_theme from GitHub (prod).
       git:
         repo: https://github.com/jonesinator/muse_theme.git
         dest: /var/www/html/wp-content/themes/muse_theme
-        version: "{{ usps.muse_usps_server_version }}"
       when: system.environment == "prod"
 
-    - name: Clone muse_usps_server from GitHub (dev).
+    - name: Clone muse_theme from GitHub (dev).
       git:
         repo: https://github.com/jonesinator/muse_theme.git
         dest: /vagrant/muse_theme
@@ -500,8 +510,25 @@
         state: link
       when: system.environment == "dev"
 
+    - name: Install packages.
+      shell: "npm install --verbose --unsafe-perm"
+      args:
+        chdir: /var/www/html/wp-content/themes/muse_theme
+        creates: /var/www/html/wp-content/themes/muse_theme/node_modules
+
     - name: Activate theme.
       command: "wp --allow-root --path=/var/www/html theme activate muse_theme"
+      capture: output
+      changed_when "'already active' not in output.stderr"
+
+    #
+    # Import some content.
+    #
+    - name: Import posts from testing.
+      command: |
+        wp --allow-root --path=/var/www/html import
+        /vagrant/templates/themusecollaborative.wordpress.2018-02-05.xml
+        --authors=create
 
     #
     # Fix permissions in the WordPress file tree.
