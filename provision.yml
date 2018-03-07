@@ -496,13 +496,13 @@
 
     - name: Clone muse_theme from GitHub (prod).
       git:
-        repo: https://github.com/jonesinator/muse_theme.git
+        repo: https://github.com/The-Muse-Collaborative/muse_theme.git
         dest: /var/www/html/wp-content/themes/muse_theme
       when: system.environment == "prod"
 
     - name: Clone muse_theme from GitHub (dev).
       git:
-        repo: https://github.com/jonesinator/muse_theme.git
+        repo: https://github.com/The-Muse-Collaborative/muse_theme.git
         dest: /vagrant/muse_theme
       when: system.environment == "dev"
 
